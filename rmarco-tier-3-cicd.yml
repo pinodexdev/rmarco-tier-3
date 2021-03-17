@@ -1,0 +1,292 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Apper DevOps Engineer Technical Challenge - Raphael Marco - Tier 3 - CI/CD"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "raphael-marco-tier-3"
+
+  Environment:
+    Type: String
+    Default: "dev"
+
+  EksStackName:
+    Type: String
+
+  RdsStackName:
+    Type: String
+
+Resources:
+  # Start artifacts s3 bucket
+
+  ExpressMinAppPipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-artifacts" ] ]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-artifacts" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  ExpressMinAppPipelineArtifactBucketPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-artifacts" ] ]
+      Description: "Used to allow read and write access to artifacts S3 bucket for express-minapp."
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action: "s3:ListBucket"
+            Resource: !GetAtt ExpressMinAppPipelineArtifactBucket.Arn
+          - Effect: "Allow"
+            Action: "s3:*"
+            Resource: !Join [ "/", [ !GetAtt ExpressMinAppPipelineArtifactBucket.Arn, "*" ] ]
+
+  # End artifacts s3 bucket
+
+  # Start github connection
+
+  ExpressMinAppGithub:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "github" ] ]
+      ProviderType: "GitHub"
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "github" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  ExpressMinAppGithubPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "github-connection" ] ]
+      Description: "Used to allow usage of the GitHub connection"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action: "codestar-connections:UseConnection"
+            Resource: !Ref ExpressMinAppGithub
+
+  # End github connection
+
+  # Start codebuild project
+
+  ExpressMinAppProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp" ] ]
+      Description: "Build express-minapp"
+      Environment:
+        Image: "aws/codebuild/standard:4.0"
+        Type: "LINUX_CONTAINER"
+        ComputeType: "BUILD_GENERAL1_SMALL"
+        PrivilegedMode: True
+      Artifacts:
+        Type: "CODEPIPELINE"
+      Source:
+        Type: "CODEPIPELINE"
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project" ] ]
+          Status: "ENABLED"
+          StreamName: "default"
+      ServiceRole: !Ref ExpressMinAppProjectServiceRole
+
+  ExpressMinAppProjectPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project" ] ]
+      Description: "Used to allow access to express-minapp codebuild project"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action: "codebuild:*"
+            Resource: !GetAtt ExpressMinAppProject.Arn
+
+  ExpressMinAppDatabaseSecretPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-database" ] ]
+      Description: "Used to allow access to express-minapp database secret"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "secretsmanager:GetRandomPassword"
+              - "secretsmanager:GetResourcePolicy"
+              - "secretsmanager:GetSecretValue"
+              - "secretsmanager:DescribeSecret"
+              - "secretsmanager:ListSecretVersionIds"
+            Resource:
+              Fn::ImportValue:
+                !Sub "${RdsStackName}-MasterDbCredentials"
+
+  ExpressMinAppEksClusterPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-eks-cluster" ] ]
+      Description: "Used to allow access to express-minapp EKS cluster"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action: "eks:DescribeCluster"
+            Resource:
+              Fn::ImportValue:
+                !Sub "${EksStackName}-MainEksClusterArm"
+
+  ExpressMinAppCloudwatchPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project-cloudwatch" ] ]
+      Description: "Used to allow access to express-minapp cloudwatch"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource:
+              - !Join [ "", [
+                  !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:",
+                  !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project" ] ]
+                ] ]
+              - !Join [ "", [
+                  !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:",
+                  !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project" ] ],
+                  ":*"
+                ] ]
+
+  ExpressMinAppProjectServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-project" ] ]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Description: "Raphael Marco - Tier 3 - Codebuild Service Role"
+      ManagedPolicyArns:
+        - !Ref ExpressMinAppCloudwatchPolicy
+        - !Ref ExpressMinAppPipelineArtifactBucketPolicy
+        - !Ref ExpressMinAppGithubPolicy
+        - !Ref ExpressMinAppDatabaseSecretPolicy
+        - !Ref ExpressMinAppEksClusterPolicy
+        - Fn::ImportValue:
+            !Sub "${EksStackName}-ContainerRepositoryCorePolicyArn"
+        - Fn::ImportValue:
+            !Sub "${EksStackName}-ExpressMinAppContainerRepositoryReadPolicyArn"
+        - Fn::ImportValue:
+            !Sub "${EksStackName}-ExpressMinAppContainerRepositoryWritePolicyArn"
+
+  # End codebuild project
+
+  # Start codepipeline
+
+  ExpressMinAppPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp" ] ]
+      RoleArn: !GetAtt ExpressMinAppPipelineServiceRole.Arn
+      ArtifactStore:
+        Type: "S3"
+        Location: !Ref ExpressMinAppPipelineArtifactBucket
+      Stages:
+        - Name: "Source"
+          Actions:
+            - Name: "Source"
+              ActionTypeId:
+                Version: "1"
+                Category: "Source"
+                Owner: "AWS"
+                Provider: "CodeStarSourceConnection"
+              Configuration:
+                ConnectionArn: !Ref ExpressMinAppGithub
+                FullRepositoryId: "pinodex/apper-tier-3-express-minapp"
+                BranchName: !Ref Environment
+                OutputArtifactFormat: "CODE_ZIP"
+              OutputArtifacts:
+                - Name: "SourceArtifact"
+        - Name: "Build"
+          Actions:
+            - Name: "Build"
+              ActionTypeId:
+                Version: "1"
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+              Configuration:
+                ProjectName: !Ref ExpressMinAppProject
+                EnvironmentVariables:
+                  !Join [ "", [
+                    "[{\"name\": \"REPOSITORY_URI\", \"value\": \"",
+                    !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/",
+                    Fn::ImportValue: !Sub "${EksStackName}-ExpressMinAppContainerRepositoryName",
+                    "\"}, {\"name\": \"DATABASE_SECRET_ARN\", \"value\": \"",
+                    Fn::ImportValue: !Sub "${RdsStackName}-MasterDbCredentials",
+                    "\"}, {\"name\": \"EKS_CLUSTER_NAME\", \"value\": \"",
+                    Fn::ImportValue: !Sub "${EksStackName}-MainEksClusterName",
+                    "\"}]"
+                  ] ]
+              InputArtifacts:
+                - Name: "SourceArtifact"
+              OutputArtifacts:
+                - Name: "BuildArtifact"
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp" ] ]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ExpressMinAppPipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-cicd" ] ]
+      Description: "Service role for express-minapp Codepipeline"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref ExpressMinAppPipelineArtifactBucketPolicy
+        - !Ref ExpressMinAppGithubPolicy
+        - !Ref ExpressMinAppProjectPolicy
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-cicd" ] ]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # End codepipeline

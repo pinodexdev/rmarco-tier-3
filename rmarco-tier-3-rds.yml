@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Apper DevOps Engineer Technical Challenge - Raphael Marco - Tier 3 - RDS"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "raphael-marco-tier-3"
+
+  Environment:
+    Type: String
+    Default: "dev"
+
+  VpcStackName:
+    Type: String
+
+Resources:
+  MasterDb:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: "db.t3.micro"
+
+      Engine: "mysql"
+      EngineVersion: "8.0"
+
+      StorageType: "gp2"
+      AllocatedStorage: 20
+      MaxAllocatedStorage: 100
+
+      DBInstanceIdentifier: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+      MasterUsername: !Sub '{{resolve:secretsmanager:${MasterDbCredentials}::username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${MasterDbCredentials}::password}}'
+      DBName: master
+
+      DBSubnetGroupName: !Ref MasterDbSubnetGroup
+      PubliclyAccessible: False
+      MultiAZ: True
+
+      VPCSecurityGroups:
+        - !Ref MasterDbSecurityGroup
+
+      BackupRetentionPeriod: 30
+      AllowMajorVersionUpgrade: False
+      AutoMinorVersionUpgrade: True
+      DeleteAutomatedBackups: False
+      DeletionProtection: False
+
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  MasterDbCredentials:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master-db" ] ]
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master-db" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  MasterDbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Test Group"
+      SubnetIds:
+         - Fn::ImportValue:
+            !Sub "${VpcStackName}-VpcSubnetDatabase1Id"
+         - Fn::ImportValue:
+            !Sub "${VpcStackName}-VpcSubnetDatabase2Id"
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  MasterDbCredentialsToMasterDb:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref MasterDbCredentials
+      TargetId: !Ref MasterDb
+      TargetType: AWS::RDS::DBInstance
+
+  MasterDbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${VpcStackName}-VpcId"
+      GroupName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+      GroupDescription: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+      SecurityGroupIngress:
+        - Description: "Allow MySQL port from vpc subnet"
+          CidrIp:
+            Fn::ImportValue:
+              !Sub "${VpcStackName}-VpcCidrBlock"
+          IpProtocol: "tcp"
+          FromPort: 3306
+          ToPort: 3306
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "master" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+Outputs:
+  MasterDbAddress:
+    Description: "Master DB Address"
+    Value: !GetAtt MasterDb.Endpoint.Address
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "MasterDbAddress" ] ]
+
+  MasterDbCredentials:
+    Description: "Master DB Credentials"
+    Value: !Ref MasterDbCredentials
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "MasterDbCredentials" ] ]

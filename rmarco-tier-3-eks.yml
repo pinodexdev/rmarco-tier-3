@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Apper DevOps Engineer Technical Challenge - Raphael Marco - Tier 3 - EKS"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "raphael-marco-tier-3"
+
+  Environment:
+    Type: String
+    Default: "dev"
+
+  VpcStackName:
+    Type: String
+
+Resources:
+  # Start EKS cluster
+
+  MainEksCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, !Ref Environment ] ]
+      KubernetesNetworkConfig:
+        ServiceIpv4Cidr:
+          Fn::ImportValue:
+            !Sub "${VpcStackName}-EksClusterServiceIpv4Cidr"
+      ResourcesVpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub "${VpcStackName}-VpcSubnetPrivate1Id"
+          - Fn::ImportValue:
+              !Sub "${VpcStackName}-VpcSubnetPrivate2Id"
+          - Fn::ImportValue:
+              !Sub "${VpcStackName}-VpcSubnetPublic1Id"
+          - Fn::ImportValue:
+              !Sub "${VpcStackName}-VpcSubnetPublic2Id"
+      RoleArn: !GetAtt MainEksClusterRole.Arn
+
+  MainEksClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "eks" ] ]
+      Description: "Role for the EKS cluster"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "eks.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "eks" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  MainEksClusterNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref MainEksCluster
+      NodegroupName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "default" ] ]
+      CapacityType: "ON_DEMAND"
+      InstanceTypes:
+        - t3.medium
+      NodeRole: !GetAtt MainEksClusterNodeGroupRole.Arn
+      ScalingConfig:
+        DesiredSize: 2
+        MaxSize: 10
+        MinSize: 2
+      Subnets:
+        - Fn::ImportValue:
+            !Sub "${VpcStackName}-VpcSubnetPrivate1Id"
+        - Fn::ImportValue:
+            !Sub "${VpcStackName}-VpcSubnetPrivate2Id"
+
+  MainEksClusterNodeGroupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "eks-node-group-default" ] ]
+      Description: "Role for the EKS cluster"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+        - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        - "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "eks-node-group-default" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  # End EKS cluster
+
+  # Start ECR repository
+
+  ExpressMinAppContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      ImageTagMutability: "MUTABLE"
+      RepositoryName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp" ] ]
+      Tags:
+        - Key: "Name"
+          Value: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp" ] ]
+        - Key: "Project"
+          Value: !Ref ProjectName
+        - Key: "Environment"
+          Value: !Ref Environment
+
+  ExpressMinAppContainerRepositoryReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-ecr-read" ] ]
+      Description: "Used to allow read access to express-minapp ECR"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "ecr:DescribeImages"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:ListImages"
+            Resource: !GetAtt ExpressMinAppContainerRepository.Arn
+
+  ExpressMinAppContainerRepositoryWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "express-minapp-ecr-write" ] ]
+      Description: "Used to allow write access to express-minapp ECR"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "ecr:PutImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
+            Resource: !GetAtt ExpressMinAppContainerRepository.Arn
+
+  ContainerRepositoryCorePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Join [ "-", [ !Ref ProjectName, !Ref Environment, "ecr-core" ] ]
+      Description: "Used to allow core policies such as GetAuthorizationToken to ECR"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "ecr:GetAuthorizationToken"
+            Resource: "*"
+
+  # End ECR repository
+
+Outputs:
+  MainEksClusterName:
+    Description: "Cluster name"
+    Value: !Ref MainEksCluster
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "MainEksClusterName" ] ]
+
+  MainEksClusterArm:
+    Description: "Cluster ARN"
+    Value: !GetAtt MainEksCluster.Arn
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "MainEksClusterArm" ] ]
+
+  ExpressMinAppContainerRepositoryReadPolicyArn:
+    Description: "Read policy for express-minapp ECR repository"
+    Value: !Ref ExpressMinAppContainerRepositoryReadPolicy
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "ExpressMinAppContainerRepositoryReadPolicyArn" ] ]
+
+  ExpressMinAppContainerRepositoryWritePolicyArn:
+    Description: "Read policy for express-minapp ECR repository"
+    Value: !Ref ExpressMinAppContainerRepositoryWritePolicy
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "ExpressMinAppContainerRepositoryWritePolicyArn" ] ]
+
+  ContainerRepositoryCorePolicyArn:
+    Description: "Read policy for express-minapp ECR repository"
+    Value: !Ref ContainerRepositoryCorePolicy
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "ContainerRepositoryCorePolicyArn" ] ]
+
+  ExpressMinAppContainerRepositoryName:
+    Description: "express-minapp ECR repository name"
+    Value: !Ref ExpressMinAppContainerRepository
+    Export:
+      Name: !Join [ "-", [ !Ref "AWS::StackName", "ExpressMinAppContainerRepositoryName" ] ]
